@@ -23,5 +23,5 @@ void main()
     vec4 c = texture(tex, vec2(stexcox, stexcoy)); 
     if(fuv.x > xtrim) discard;
     if(c.a < 0.1) discard;
-    color = c;
+    color = vec4(stexcox, stexcoy, 1.0, 1.0);
 }
