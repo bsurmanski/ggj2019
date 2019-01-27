@@ -12,35 +12,49 @@ use std::time::Duration;
 use gl::types::*;
 use nalgebra::{zero, Vector2, Vector4, Matrix2};
 use nalgebra::geometry::Point2;
+use std::sync::Mutex;
 
 #[macro_use]
 extern crate lazy_static;
 
 pub enum GameState {
-    Menu,
+    Title,
     Instruction,
     Game,
+    Modal,
+    Fly,
     GameOver,
 }
 
 pub struct Modal {
     kind: ModalKind,
-    descision: Option<bool>,
+    text: &'static str,
+    choices: Vec<&'static str>,
+    selection: i32,
 }
 
 impl Modal {
-    pub fn new(k: ModalKind) -> Self {
-        Self { kind: k, descision: None }
+    pub fn new(k: ModalKind, text: &'static str, choices: Vec<&'static str>) -> Self {
+        Self { kind: k, text: text, choices: choices, selection: 0 }
     }
 }
 
 pub enum ModalKind {
-    HelloWorld,
-    UniOttawa,
-    UniToronto,
-    UniMontreal,
-    GetMarried,
-    HaveKids,
+    Tantrum,
+    Move,
+    Married,
+    Kids,
+}
+
+pub fn maybe_start_modal(gd: &mut GameData, new_modal: Modal) -> bool {
+    for m in gd.modals_done.iter() {
+        if str_eq(m.text, new_modal.text) {
+            return false;
+        }
+    }
+    gd.current_modal = Some(new_modal);
+    gd.game_state = GameState::Modal;
+    return true;
 }
 
 // idea? everything starts negative?
@@ -136,7 +150,7 @@ impl City {
 }
 
 lazy_static!{
-    static ref CITIES: Vec<City> = {
+    static ref CITIES: Mutex<Vec<City>> = {
         let mut v = Vec::new();
         let cities = [
             City::new_home("Toronto", [181, 135]),
@@ -155,8 +169,34 @@ lazy_static!{
             City::new("Boulder", [92, 166]),
         ];
         v.extend_from_slice(&cities);
-        v
+        Mutex::new(v)
     };
+}
+
+pub fn str_eq(s1: &'static str, s2: &'static str) -> bool {
+    return s1.to_string().to_lowercase() == s2.to_string().to_lowercase();
+}
+
+
+pub fn home_city() -> City {
+    for c in CITIES.lock().unwrap().iter() {
+        if c.home {
+            return c.clone();
+        }
+    }
+    panic!("no home city?");
+}
+
+pub fn set_home_city(new_home: &'static str) {
+    let mut cities =  CITIES.lock().unwrap();
+    for c in cities.iter_mut() {
+        if c.home {
+            c.home = false;
+        }
+        if c.name.to_string().to_lowercase() == new_home.to_string().to_lowercase() {
+            c.home = true;
+        }
+    }
 }
 
 pub struct GameData {
@@ -182,6 +222,8 @@ pub struct GameData {
     age_label: Texture,
     arrow: Texture,
     modal_box: Texture,
+    title: Texture,
+    plane: Texture,
     fb: Framebuffer,
     color_tex: Texture,
     light_tex: Texture,
@@ -191,9 +233,13 @@ pub struct GameData {
     stats: Stats,
     current_focus: Focus,
     current_city: usize,
+    married: bool,
+    kids: i32,
     arrow_position: Vector2<f32>,
+    plane_position: Vector2<f32>,
     current_modal: Option<Modal>,
-    paused: bool,
+    modals_done: Vec<Modal>,
+    game_state: GameState,
 }
 
 
@@ -205,42 +251,142 @@ static TICKS_PER_WEEK: f64 = 0.1;
 
 fn handle_input(ctx: &mut Context) {
     let gd = unsafe { GAME_DATA.as_mut().unwrap() };
-    for event in ctx.sdl_event_pump.poll_iter() {
-        match event {
-            Event::Quit { .. }
-            | Event::KeyDown {
-                keycode: Some(Keycode::Escape),
-                ..
-            } => {
-                std::process::exit(0);
-            }
-            Event::KeyDown { keycode: Some(Keycode::P), .. } => {
-                gd.current_focus = Focus::Play;
-            }
-            Event::KeyDown { keycode: Some(Keycode::S), .. } => {
-                if focus_is_unlocked(gd, Focus::Socialize) {
-                    gd.current_focus = Focus::Socialize;
+    match gd.game_state {
+        GameState::Title => {
+                for event in ctx.sdl_event_pump.poll_iter() {
+                    match event {
+                    Event::Quit { .. } |
+                        Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
+                        std::process::exit(0);
+                    }
+                    Event::KeyDown { keycode: Some(Keycode::Space), .. } => {
+                        gd.game_state = GameState::Game;
+                        gd.tick = 0.0;
+                    }
+                    _ => {}
                 }
             }
-            Event::KeyDown { keycode: Some(Keycode::T), .. } => {
-                if focus_is_unlocked(gd, Focus::Research) {
-                    gd.current_focus = Focus::Research;
+        }
+        GameState::Modal => {
+            for event in ctx.sdl_event_pump.poll_iter() {
+                match event {
+                    Event::Quit { .. } |
+                        Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
+                        std::process::exit(0);
+                    }
+                    Event::KeyDown { keycode: Some(Keycode::Up), .. } => {
+                        let mut mo = gd.current_modal.as_mut().unwrap();
+                        mo.selection -= 1; 
+                        if mo.selection < 0 {
+                            mo.selection = mo.choices.len() as i32 - 1;
+                        }
+                    }
+                    Event::KeyDown { keycode: Some(Keycode::Down), .. } => {
+                        let mut mo = gd.current_modal.as_mut().unwrap();
+                        mo.selection += 1; 
+                        mo.selection %= mo.choices.len() as i32;
+                    }
+                    Event::KeyDown { keycode: Some(Keycode::Return), .. } => {
+                        execute_modal(gd);
+                    }
+                    _ => {}
                 }
             }
-            Event::KeyDown { keycode: Some(Keycode::C), .. } => {
-                if focus_is_unlocked(gd, Focus::Create) {
-                    gd.current_focus = Focus::Create;
+        }
+        GameState::Game => {
+            for event in ctx.sdl_event_pump.poll_iter() {
+                match event {
+                    Event::Quit { .. } |
+                        Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
+                        std::process::exit(0);
+                    }
+                    Event::KeyDown { keycode: Some(Keycode::Up), .. } => {
+                        match gd.current_focus {
+                            Focus::Work => {
+                                gd.current_focus = Focus::Create;
+                            }
+                            Focus::Create => {
+                                gd.current_focus = Focus::Research;
+                            }
+                            Focus::Research => {
+                                gd.current_focus = Focus::Socialize;
+                            }
+                            _ => {
+                                gd.current_focus = Focus::Play;
+                            }
+                        }
+                    }
+                    Event::KeyDown { keycode: Some(Keycode::Down), .. } => {
+                        match gd.current_focus {
+                            Focus::Play => {
+                                if focus_is_unlocked(gd, Focus::Socialize) {
+                                    gd.current_focus = Focus::Socialize;
+                                }
+                            }
+                            Focus::Socialize => {
+                                if focus_is_unlocked(gd, Focus::Research) {
+                                    gd.current_focus = Focus::Research;
+                                }
+                            }
+                            Focus::Research => {
+                                if focus_is_unlocked(gd, Focus::Create) {
+                                    gd.current_focus = Focus::Create;
+                                }
+                            }
+                            _ => {
+                                if focus_is_unlocked(gd, Focus::Work) {
+                                    gd.current_focus = Focus::Work;
+                                }
+                            }
+                        }
+                    }
+                    Event::KeyDown { keycode: Some(Keycode::P), .. } => {
+                        gd.current_focus = Focus::Play;
+                    }
+                    Event::KeyDown { keycode: Some(Keycode::S), .. } => {
+                        if focus_is_unlocked(gd, Focus::Socialize) {
+                            gd.current_focus = Focus::Socialize;
+                        }
+                    }
+                    Event::KeyDown { keycode: Some(Keycode::T), .. } => {
+                        if focus_is_unlocked(gd, Focus::Research) {
+                            gd.current_focus = Focus::Research;
+                        }
+                    }
+                    Event::KeyDown { keycode: Some(Keycode::C), .. } => {
+                        if focus_is_unlocked(gd, Focus::Create) {
+                            gd.current_focus = Focus::Create;
+                        }
+                    }
+                    Event::KeyDown { keycode: Some(Keycode::W), .. } => {
+                        if focus_is_unlocked(gd, Focus::Work) {
+                            gd.current_focus = Focus::Work;
+                        }
+                    }
+                    Event::KeyDown { keycode: Some(Keycode::L), .. } => {
+                        gd.current_modal = Some(Modal::new(ModalKind::Move,
+                                                           "goto university?",
+                                                           vec!["Toronto", 
+                                                           "SF", "Montreal", "No"]));
+                        gd.game_state = GameState::Modal;
+                    }
+                    Event::MouseMotion { x, y, .. } => {
+                        gd.cursor_position = Point2::new(x, y);
+                    }
+                    _ => {}
                 }
             }
-            Event::KeyDown { keycode: Some(Keycode::W), .. } => {
-                if focus_is_unlocked(gd, Focus::Work) {
-                    gd.current_focus = Focus::Work;
+        }
+        _ => {
+            for event in ctx.sdl_event_pump.poll_iter() {
+                match event {
+                    Event::Quit { .. } |
+                        Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
+                        std::process::exit(0);
+                    }
+                    _ => {}
                 }
             }
-            Event::MouseMotion { x, y, .. } => {
-                gd.cursor_position = Point2::new(x, y);
-            }
-            _ => {}
         }
     }
 }
@@ -257,10 +403,12 @@ fn draw_digit(gd: &GameData, p: Point2<i32>, digit: u32) {
 }
 
 fn draw_letter(gd: &GameData, p: Point2<i32>, letter: char) {
-    let c = letter.to_ascii_uppercase();
-    let index = c as i32 - 'A' as i32;
-    let new_p = Point2::new(p.x + 78 - (index * 6) as i32, p.y);
-    let letter_w = 1.0 / 26.0;
+    let index = if letter == '?' { 26 } else {
+        let c = letter.to_ascii_uppercase();
+        c as i32 - 'A' as i32
+    };
+    let new_p = Point2::new(p.x + 81 - (index * 6) as i32, p.y);
+    let letter_w = 1.0 / 27.0;
 
     draw_texture_rect_extra(gd, &gd.font, new_p,
                             gd.tick as f32, 
@@ -310,12 +458,24 @@ fn draw_texture_rect_extra(gd: &GameData, tex: &Texture, p: Point2<i32>,
                            tick: f32, trim: Vector2<f32>, rtrim: Vector2<f32>, 
                            mut bounce: Vector2<f32>, 
                            tint: Vector4<f32>) {
+    let mat2 = Matrix2::new(tex.width as f32 / WIDTH as f32, 0.0,
+                            0.0, tex.height as f32 / HEIGHT as f32);
+    draw_texture_rect_with_mat2(gd, tex, p, tick, trim, rtrim, bounce, tint, mat2);
+}
+
+fn draw_texture_rect_with_mat2(gd: &GameData,
+                               tex: &Texture,
+                               p: Point2<i32>,
+                               tick: f32,
+                               trim: Vector2<f32>,
+                               rtrim: Vector2<f32>,
+                               mut bounce: Vector2<f32>,
+                               tint: Vector4<f32>,
+                               mat: Matrix2<f32>) {
     let gd = unsafe { GAME_DATA.as_mut().unwrap() };
     gd.fb.bind();
     gd.program.bind_texture("tex", &tex, 0);
-    gd.program.set_uniform_mat2("transform", 
-                                   &Matrix2::new(tex.width as f32 / WIDTH as f32, 0.0, 
-                                                 0.0, tex.height as f32 / HEIGHT as f32));
+    gd.program.set_uniform_mat2("transform", &mat);
     // transform from [0..W, 0..H] to [-1..1, 1..-1]
     gd.program.set_uniform_vec2("offset", &Vector2::new(2.0 * p.x as f32 / WIDTH as f32 
                                                         - 1.0,
@@ -390,7 +550,7 @@ fn draw_age(gd: &GameData) {
     draw_digit(&gd, Point2::new(190, 16), gd.age % 10);
 }
 
-fn draw_modal(gd: &GameData, m: Modal) {
+fn draw_modal(gd: &GameData, m: &Modal) {
     draw_texture_rect_extra(gd, &gd.modal_box,
                             Point2::new(WIDTH as i32 / 2, HEIGHT as i32 / 2),
                             gd.tick as f32,
@@ -398,18 +558,25 @@ fn draw_modal(gd: &GameData, m: Modal) {
                             Vector2::new(1.0, 1.0), // rtrim
                             Vector2::new(1.0, 0.0),
                             Vector4::new(1.0, 1.0, 1.0, 1.0));
-    match m.kind {
-        ModalKind::HelloWorld => {
-            draw_string(gd, Point2::new(WIDTH as i32 / 2, HEIGHT as i32 / 2),
-            "HELLO\nWorld".to_string());
-        }
-        _ => {
+
+    draw_string(gd, Point2::new(WIDTH as i32 / 2, HEIGHT as i32 / 2 - 20),
+    m.text.to_string());
+    for (i, c) in m.choices.iter().enumerate() {
+        let y = HEIGHT as i32 / 2 + 10 * i as i32;
+        draw_string(gd, Point2::new(WIDTH as i32 / 2,
+                                    y),
+        c.to_string());
+
+        if m.selection == i as i32 {
+            draw_texture_rect_screenspace(
+                gd, &gd.arrow, Point2::new(WIDTH as i32 / 2 - c.len() as i32 * 5, 
+                                           y));
         }
     }
 }
 
 fn draw_cities(gd: &GameData) {
-    for city in CITIES.iter() {
+    for city in CITIES.lock().unwrap().iter() {
         let p = Point2::new(city.position[0], city.position[1]);
         if city.home {
             let offset_y = (gd.tick * 4.0).sin().abs() * 3.0;
@@ -426,10 +593,7 @@ fn draw_cities(gd: &GameData) {
     }
 }
 
-fn draw(ctx: &mut Context) {
-    let gd = unsafe { GAME_DATA.as_mut().unwrap() };
-
-    ctx.window().clear();
+fn draw_standard(gd: &mut GameData) {
     draw_water(gd);
     draw_map(gd);
     draw_bar(gd, Point2::new((WIDTH - 50) as i32, (HEIGHT - 20) as i32),
@@ -448,10 +612,59 @@ fn draw(ctx: &mut Context) {
     draw_age(&gd);
 
     draw_cities(&gd);
+}
 
-    //draw_modal(gd, Modal::new(ModalKind::HelloWorld));
+fn draw(ctx: &mut Context) {
+    let gd = unsafe { GAME_DATA.as_mut().unwrap() };
 
-    draw_texture_rect_screenspace(gd, &gd.cursor, gd.cursor_position / SCALING as i32);
+    ctx.window().clear();
+    match gd.game_state {
+        GameState::Title => {
+            let c = (((gd.tick * 3.0).cos() / 2.0 + 0.5) as f32).max(0.3);
+            draw_texture_rect_extra(gd, &gd.title,
+                                    Point2::new((WIDTH / 2) as i32, (HEIGHT / 2) as i32),
+                                    gd.tick as f32,
+                                    Vector2::new(1.0, 1.0), // trim
+                                    Vector2::new(1.0, 1.0), // rtrim
+                                    Vector2::new(10.0, 0.0), // wiggle
+                                    Vector4::new(0.4, c, 0.4, 1.0));
+        }
+        GameState::Modal => {
+            draw_standard(gd);
+            if let Some(m) = &gd.current_modal {
+                draw_modal(gd, m);
+            }
+        }
+        GameState::Fly => {
+            draw_standard(gd);
+
+            let home = home_city();
+            let home_pos = Vector2::new(home.position[0] as f32,
+                                        home.position[1] as f32);
+            let rot_matrix = Matrix2::new(gd.plane.width as f32 / WIDTH as f32, 0.0, 
+                                          0.0, gd.plane.height as f32 / HEIGHT as f32);
+            let mut delta = home_pos - gd.plane_position;
+            delta = delta.normalize();
+
+            draw_texture_rect_with_mat2(gd, &gd.plane, 
+                                    Point2::new(gd.plane_position.x as i32,
+                                                gd.plane_position.y as i32), 
+                                    gd.tick as f32,
+                                    Vector2::new(1.0, 1.0), // trim
+                                    Vector2::new(1.0, 1.0), // rtrim
+                                    Vector2::new(0.0, 1.0),
+                                    Vector4::new(1.0, 1.0, 1.0, 1.0),
+                                    rot_matrix);
+        }
+        GameState::Game | _ => {
+            draw_standard(gd);
+
+            /* Mouse cursor not yet implemented.
+            draw_texture_rect_screenspace(gd, &gd.cursor, 
+                                          gd.cursor_position / SCALING as i32);
+            */
+        }
+    }
 
     Framebuffer::unbind();
     unsafe { gl::Viewport(0, 0,
@@ -460,153 +673,250 @@ fn draw(ctx: &mut Context) {
     gd.program.bind_texture("tex", &gd.color_tex, 0);
     gd.program.set_uniform_mat2("transform", &Matrix2::identity());
     gd.program.set_uniform_vec2("offset", &zero());
+    gd.program.set_uniform_vec2("trim", &Vector2::new(1.0, 1.0));
+    gd.program.set_uniform_vec2("rtrim", &Vector2::new(1.0, 1.0));
+    match gd.game_state {
+        GameState::Modal => {
+            gd.program.set_uniform_vec2("bounce", &Vector2::new(5.0 / WIDTH as f32, 0.0));
+        },
+        _ => {
+            gd.program.set_uniform_vec2("bounce", &Vector2::new(0.0, 0.0));
+        }
+    }
     gd.program.draw(&gd.quad);
 
     ctx.swap_buffers();
 }
 
+fn execute_modal(gd: &mut GameData) {
+    let modal = gd.current_modal.as_ref().unwrap();
+    let choice = modal.choices[modal.selection as usize];
+    match modal.kind {
+        ModalKind::Move => {
+            let current_home = home_city();
+            gd.plane_position = Vector2::new(current_home.position[0] as f32,
+                                             current_home.position[1] as f32);
+            if !str_eq(choice, "no") {
+                set_home_city(choice);
+            } 
+            gd.game_state = GameState::Fly;
+        }
+        ModalKind::Tantrum => {
+            if str_eq(choice, "yes") {
+                gd.stats.relaxation += 0.1;
+                gd.stats.social_exp -= 0.1;
+            } else {
+                gd.stats.relaxation -= 0.1;
+                gd.stats.social_exp += 0.1;
+            }
+        }
+        _ => {
+            gd.game_state = GameState::Game;
+        }
+    }
+    gd.modals_done.push(gd.current_modal.take().unwrap());
+}
+
 fn update(dt: f64) {
     let mut gd = unsafe { GAME_DATA.as_mut().unwrap() };
-    let dweek = (dt / TICKS_PER_WEEK) as f32;
 
-    // arrow
-    { 
-        let y_offset = 17 + match gd.current_focus {
-            Focus::Play => 0,
-            Focus::Socialize => 11,
-            Focus::Research => 22,
-            Focus::Create => 33,
-            Focus::Work => 45,
-        };
-        let delta = y_offset as f32 - gd.arrow_position.y;
-        gd.arrow_position.y = gd.arrow_position.y + delta * dt as f32 * 8.0;
-    }
+    match gd.game_state {
+        GameState::Modal => {
+        }
+        GameState::Fly => {
+            let home = home_city();
+            let home_pos = Vector2::new(home.position[0] as f32,
+                                        home.position[1] as f32);
+            let mut delta = home_pos - gd.plane_position;
+            if delta.magnitude() < 4.0 {
+                gd.game_state = GameState::Game;
+            }
+            delta = delta.normalize();
+            gd.plane_position = gd.plane_position + delta;
+        }
+        GameState::Game => {
+            let dweek = (dt / TICKS_PER_WEEK) as f32;
 
-    if let Some(m) = &gd.current_modal {
-        if let Some(d) = m.descision {
-            match m.kind {
-                _ => {
+            // arrow
+            { 
+                let y_offset = 17 + match gd.current_focus {
+                    Focus::Play => 0,
+                    Focus::Socialize => 11,
+                    Focus::Research => 22,
+                    Focus::Create => 33,
+                    Focus::Work => 45,
+                };
+                let delta = y_offset as f32 - gd.arrow_position.y;
+                gd.arrow_position.y = gd.arrow_position.y + delta * dt as f32 * 8.0;
+            }
+
+            // age
+            {
+                gd.age = (gd.tick / (TICKS_PER_WEEK * 50.0)) as u32;
+            }
+
+            if gd.age == 2 {
+                maybe_start_modal(
+                    gd, Modal::new(ModalKind::Tantrum,
+                        "tantrum?", vec!["yes", "no"]));
+            }
+
+            if gd.age == 18 {
+                maybe_start_modal(
+                    gd, Modal::new(ModalKind::Move,
+                                   "goto university?",
+                                   vec!["toronto", "ottawa", "montreal", "no"]));
+            }
+
+            if gd.age == 24 {
+                let home = home_city();
+                maybe_start_modal(
+                    gd, Modal::new(ModalKind::Move,
+                                   "take job?",
+                                   vec![home.name, "vancouver", "sf", "ny"]));
+            }
+
+            if gd.age == 30 {
+                let home = home_city();
+                maybe_start_modal(
+                    gd, Modal::new(ModalKind::Move,
+                                   "get married?",
+                                   vec!["yes", "no"]));
+            }
+
+            if gd.age == 32 && gd.married {
+                let home = home_city();
+                maybe_start_modal(
+                    gd, Modal::new(ModalKind::Move,
+                                   "spouce wants kids",
+                                   vec!["yes", "no"]));
+            }
+
+            if gd.age == 35 && !gd.married {
+                let home = home_city();
+                maybe_start_modal(
+                    gd, Modal::new(ModalKind::Move,
+                                   "move somewhere exciting?",
+                                   vec!["seattle", "calgary", "boulder", "la"]));
+            }
+
+            if gd.age == 40 {
+            }
+
+            // stats
+            {
+                match gd.age {
+                    0...2 => {
+                        gd.stats.relaxation -= 0.005 * dweek;
+                        gd.stats.belonging -= 0.005 * dweek;
+                        match gd.current_focus {
+                            Focus::Play => {
+                                gd.stats.relaxation += 0.015 * dweek;
+                            }
+                            Focus::Socialize | _ => {
+                                gd.stats.belonging += 0.015 * dweek;
+                            }
+                        }
+                    }
+                    3...5 => {
+                        gd.stats.relaxation -= 0.005 * dweek;
+                        gd.stats.belonging -= 0.005 * dweek;
+                        gd.stats.pride -= 0.005 * dweek;
+                        if gd.stats.belonging > 0.99 {
+                            gd.stats.pride += 0.006 * dweek;
+                        }
+                        match gd.current_focus {
+                            Focus::Play => {
+                                gd.stats.relaxation += 0.015 * dweek;
+                                gd.stats.play_exp += 0.005 * dweek;
+                            }
+                            Focus::Socialize => {
+                                gd.stats.belonging += 0.015 * dweek;
+                                gd.stats.social_exp += 0.005 * dweek;
+                            }
+                            Focus::Research | _ => {
+                                gd.stats.research_exp += 0.005 * dweek;
+                            }
+                        }
+                    }
+                    6...12 => {
+                        gd.stats.relaxation -= 0.005 * dweek;
+                        gd.stats.belonging -= 0.005 * dweek;
+                        gd.stats.pride -= 0.005 * dweek;
+                        gd.stats.purpose -= 0.005 * dweek;
+                        match gd.current_focus {
+                            Focus::Play => {
+                                gd.stats.relaxation += 0.015 * dweek;
+                                gd.stats.pride += gd.stats.play_exp * dweek / 100.0;
+                                gd.stats.play_exp += 0.005 * dweek;
+                            }
+                            Focus::Socialize | _ => {
+                                gd.stats.belonging += 0.015 * dweek;
+                                gd.stats.pride += 0.005 * dweek;
+                                gd.stats.social_exp += 0.005 * dweek;
+                            }
+                            Focus::Research | _ => {
+                                gd.stats.research_exp += 0.005 * dweek;
+                            }
+                        }
+                    }
+                    13...20 => {
+                        gd.stats.relaxation -= 0.005 * dweek;
+                        gd.stats.belonging -= 0.005 * dweek;
+                        gd.stats.pride -= 0.005 * dweek;
+                        gd.stats.purpose -= 0.005 * dweek;
+                        match gd.current_focus {
+                            Focus::Play => {
+                                gd.stats.relaxation += 0.010 * dweek;
+                                gd.stats.play_exp += 0.001 * dweek;
+                            }
+                            Focus::Socialize => {
+                                gd.stats.belonging += 0.010 * dweek;
+                                gd.stats.social_exp += 0.001 * dweek;
+                            }
+                            Focus::Research => {
+                                gd.stats.belonging += 0.001 * dweek;
+                                gd.stats.pride += 0.001 * dweek;
+                                gd.stats.research_exp += 0.001 * dweek;
+                            }
+                            Focus::Create | _ => {
+                                gd.stats.pride += 0.005 * dweek;
+                                gd.stats.create_exp += 0.001 * dweek;
+                            }
+                        }
+                    }
+                    _ => {
+                        gd.stats.relaxation -= 0.005 * dweek;
+                        gd.stats.belonging -= 0.005 * dweek;
+                        match gd.current_focus {
+                            Focus::Play => {
+                                gd.stats.relaxation += 0.015 * dweek;
+                                gd.stats.play_exp += 0.005 * dweek;
+                            }
+                            Focus::Socialize | _ => {
+                                gd.stats.belonging += 0.015 * dweek;
+                                gd.stats.social_exp += 0.005 * dweek;
+                            }
+                            Focus::Research => {
+                                gd.stats.research_exp += 0.002 * dweek;
+                            }
+                            Focus::Create => {
+                                gd.stats.pride += gd.stats.create_exp / 100.0 * dweek;
+                                gd.stats.create_exp += 0.001 * dweek;
+                            }
+                            Focus::Work => {
+                            }
+                        }
+                    }
                 }
+
+                gd.stats.belonging = nalgebra::clamp(gd.stats.belonging , 0.0, 1.1);
+                gd.stats.purpose = nalgebra::clamp(gd.stats.purpose, 0.0, 1.1);
+                gd.stats.pride = nalgebra::clamp(gd.stats.pride, 0.0, 1.1);
+                gd.stats.relaxation = nalgebra::clamp(gd.stats.relaxation, 0.0, 1.1);
             }
         }
-    } else { // no modal
-        // age
-        {
-            gd.age = (gd.tick / (TICKS_PER_WEEK * 50.0)) as u32;
-        }
-
-        // stats
-        {
-            match gd.age {
-                0...2 => {
-                    gd.stats.relaxation -= 0.005 * dweek;
-                    gd.stats.belonging -= 0.005 * dweek;
-                    match gd.current_focus {
-                        Focus::Play => {
-                            gd.stats.relaxation += 0.015 * dweek;
-                        }
-                        Focus::Socialize | _ => {
-                            gd.stats.belonging += 0.015 * dweek;
-                        }
-                    }
-                }
-                3...5 => {
-                    gd.stats.relaxation -= 0.005 * dweek;
-                    gd.stats.belonging -= 0.005 * dweek;
-                    gd.stats.pride -= 0.005 * dweek;
-                    if gd.stats.belonging > 0.99 {
-                        gd.stats.pride += 0.006 * dweek;
-                    }
-                    match gd.current_focus {
-                        Focus::Play => {
-                            gd.stats.relaxation += 0.015 * dweek;
-                            gd.stats.play_exp += 0.005 * dweek;
-                        }
-                        Focus::Socialize => {
-                            gd.stats.belonging += 0.015 * dweek;
-                            gd.stats.social_exp += 0.005 * dweek;
-                        }
-                        Focus::Research | _ => {
-                            gd.stats.research_exp += 0.005 * dweek;
-                        }
-                    }
-                }
-                6...12 => {
-                    gd.stats.relaxation -= 0.005 * dweek;
-                    gd.stats.belonging -= 0.005 * dweek;
-                    gd.stats.pride -= 0.005 * dweek;
-                    gd.stats.purpose -= 0.005 * dweek;
-                    match gd.current_focus {
-                        Focus::Play => {
-                            gd.stats.relaxation += 0.015 * dweek;
-                            gd.stats.pride += gd.stats.play_exp * dweek / 100.0;
-                            gd.stats.play_exp += 0.005 * dweek;
-                        }
-                        Focus::Socialize | _ => {
-                            gd.stats.belonging += 0.015 * dweek;
-                            gd.stats.pride += 0.005 * dweek;
-                            gd.stats.social_exp += 0.005 * dweek;
-                        }
-                        Focus::Research | _ => {
-                            gd.stats.research_exp += 0.005 * dweek;
-                        }
-                    }
-                }
-                13...20 => {
-                    gd.stats.relaxation -= 0.005 * dweek;
-                    gd.stats.belonging -= 0.005 * dweek;
-                    gd.stats.pride -= 0.005 * dweek;
-                    gd.stats.purpose -= 0.005 * dweek;
-                    match gd.current_focus {
-                        Focus::Play => {
-                            gd.stats.relaxation += 0.010 * dweek;
-                            gd.stats.play_exp += 0.001 * dweek;
-                        }
-                        Focus::Socialize => {
-                            gd.stats.belonging += 0.010 * dweek;
-                            gd.stats.social_exp += 0.001 * dweek;
-                        }
-                        Focus::Research => {
-                            gd.stats.belonging += 0.001 * dweek;
-                            gd.stats.pride += 0.001 * dweek;
-                            gd.stats.research_exp += 0.001 * dweek;
-                        }
-                        Focus::Create | _ => {
-                            gd.stats.pride += 0.005 * dweek;
-                            gd.stats.create_exp += 0.001 * dweek;
-                        }
-                    }
-                }
-                _ => {
-                    gd.stats.relaxation -= 0.005 * dweek;
-                    gd.stats.belonging -= 0.005 * dweek;
-                    match gd.current_focus {
-                        Focus::Play => {
-                            gd.stats.relaxation += 0.015 * dweek;
-                            gd.stats.play_exp += 0.005 * dweek;
-                        }
-                        Focus::Socialize | _ => {
-                            gd.stats.belonging += 0.015 * dweek;
-                            gd.stats.social_exp += 0.005 * dweek;
-                        }
-                        Focus::Research => {
-                            gd.stats.research_exp += 0.002 * dweek;
-                        }
-                        Focus::Create => {
-                            gd.stats.pride += gd.stats.create_exp / 100.0 * dweek;
-                            gd.stats.create_exp += 0.001 * dweek;
-                        }
-                        Focus::Work => {
-                        }
-                    }
-                }
-            }
-        }
-
-        gd.stats.belonging = nalgebra::clamp(gd.stats.belonging , 0.0, 1.1);
-        gd.stats.purpose = nalgebra::clamp(gd.stats.purpose, 0.0, 1.1);
-        gd.stats.pride = nalgebra::clamp(gd.stats.pride, 0.0, 1.1);
-        gd.stats.relaxation = nalgebra::clamp(gd.stats.relaxation, 0.0, 1.1);
+        _ => {}
     }
 }
 
@@ -752,6 +1062,14 @@ fn main() -> Result<(), String> {
                 &mut image::load(
                     &mut Cursor::new(include_bytes!("../assets/modal.png").as_ref()),
                     image::ImageFormat::PNG).unwrap()),
+            title: Texture::new_rgba_from_image(
+                &mut image::load(
+                    &mut Cursor::new(include_bytes!("../assets/title.png").as_ref()),
+                    image::ImageFormat::PNG).unwrap()),
+            plane: Texture::new_rgba_from_image(
+                &mut image::load(
+                    &mut Cursor::new(include_bytes!("../assets/airplane.png").as_ref()),
+                    image::ImageFormat::PNG).unwrap()),
             fb: fb,
             color_tex: color_tex,
             light_tex: light_tex,
@@ -761,8 +1079,13 @@ fn main() -> Result<(), String> {
             stats: Stats::new(),
             current_focus: Focus::Play,
             current_city: 0,
+            married: false,
+            kids: 0,
             arrow_position: Vector2::new(262.0, 17.0),
-            paused: false,
+            plane_position: Vector2::new(0.0, 0.0),
+            modals_done: vec![],
+            //game_state: GameState::Game,
+            game_state: GameState::Title,
             current_modal: None,
         })
     };
