@@ -93,6 +93,7 @@ dependencies = [
  "emscripten 0.1.0 (git+https://github.com/bsurmanski/emscripten-rs)",
  "gl 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "image 0.21.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "lazy_static 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "nalgebra 0.16.13 (registry+https://github.com/rust-lang/crates.io-index)",
  "rockwork 0.1.2",
  "sdl2 0.32.1 (registry+https://github.com/rust-lang/crates.io-index)",

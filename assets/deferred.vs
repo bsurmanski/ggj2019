@@ -8,6 +8,6 @@ out vec2 fuv;
 
 void main()
 {
-    gl_Position = vec4(transform * position.xy + offset, 1, 1);
+    gl_Position = vec4(transform * position.xy + offset, 1.0, 1.0);
     fuv = uv;
 }
