@@ -23,6 +23,26 @@ pub enum GameState {
     GameOver,
 }
 
+pub struct Modal {
+    kind: ModalKind,
+    descision: Option<bool>,
+}
+
+impl Modal {
+    pub fn new(k: ModalKind) -> Self {
+        Self { kind: k, descision: None }
+    }
+}
+
+pub enum ModalKind {
+    HelloWorld,
+    UniOttawa,
+    UniToronto,
+    UniMontreal,
+    GetMarried,
+    HaveKids,
+}
+
 // idea? everything starts negative?
 pub struct Stats {
     money: f32, // Debt
@@ -38,6 +58,24 @@ pub struct Stats {
     work_exp: f32,
 }
 
+impl Stats {
+    fn new() -> Self {
+        Self {
+            money: 0.0,
+            belonging: 1.0,
+            purpose: 1.0,
+            pride: 1.0,
+            relaxation: 1.0,
+
+            play_exp: 0.0,
+            social_exp: 0.0,
+            research_exp: 0.0,
+            create_exp: 0.0,
+            work_exp: 0.0,
+        }
+    }
+}
+
 pub enum Focus {
     Play,
     Socialize,
@@ -48,8 +86,8 @@ pub enum Focus {
 
 pub fn focus_stage(gd: &GameData) -> u32 {
     match gd.age {
-        0...2 => 0,
-        3...7 => 1,
+        0 => 0,
+        1...7 => 1,
         8...14 => 2,
         15...21 => 3,
         _ => 4,
@@ -59,10 +97,10 @@ pub fn focus_stage(gd: &GameData) -> u32 {
 pub fn focus_is_unlocked(gd: &GameData, f: Focus) -> bool {
     match f {
         Focus::Play => true,
-        Focus::Socialize => gd.age > 2,
-        Focus::Research => gd.age > 7,
-        Focus::Create => gd.age > 14,
-        Focus::Work => gd.age > 21
+        Focus::Socialize => gd.age >= 1,
+        Focus::Research => gd.age >= 8,
+        Focus::Create => gd.age >= 15,
+        Focus::Work => gd.age >= 22
     }
 }
 
@@ -84,12 +122,16 @@ pub struct City {
     name: &'static str,
     position: [i32; 2],
     friends: Vec<Friend>,
+    home: bool,
     exp: f32, // time spent here
 }
 
 impl City {
     pub fn new(name: &'static str, position: [i32; 2]) -> Self {
-        City { name: name, position: position, friends: vec![], exp: 0.0 }
+        City { name: name, position: position, home: false, friends: vec![], exp: 0.0 }
+    }
+    pub fn new_home(name: &'static str, position: [i32; 2]) -> Self {
+        City { name: name, position: position, home: true, friends: vec![], exp: 0.0 }
     }
 }
 
@@ -97,7 +139,7 @@ lazy_static!{
     static ref CITIES: Vec<City> = {
         let mut v = Vec::new();
         let cities = [
-            City::new("Toronto", [181, 135]),
+            City::new_home("Toronto", [181, 135]),
             City::new("Ottawa", [183, 123]),
             City::new("Montreal", [196, 122]),
             City::new("SF", [19, 165]),
@@ -126,6 +168,7 @@ pub struct GameData {
     cursor: Texture,
     cursor_position: Point2<i32>,
     city_marker: Texture,
+    home_marker: Texture,
     bar: Texture,
     bar_base: Texture,
     belonging_label: Texture,
@@ -135,17 +178,22 @@ pub struct GameData {
     focus_labels: Texture,
     focus_box: Texture,
     numbers: Texture,
+    font: Texture,
     age_label: Texture,
     arrow: Texture,
+    modal_box: Texture,
     fb: Framebuffer,
     color_tex: Texture,
     light_tex: Texture,
     tick: f64,
 
     age: u32,
+    stats: Stats,
     current_focus: Focus,
     current_city: usize,
     arrow_position: Vector2<f32>,
+    current_modal: Option<Modal>,
+    paused: bool,
 }
 
 
@@ -203,10 +251,35 @@ fn draw_digit(gd: &GameData, p: Point2<i32>, digit: u32) {
     draw_texture_rect_extra(gd, &gd.numbers, new_p,
                             gd.tick as f32, 
                             Vector2::new(0.1 * digit as f32 + 0.1, 1.0),
-                            //Vector2::new(1.0, 1.0),
                             Vector2::new(1.0 - 0.1 * digit as f32, 1.0),
                             Vector2::new(0.0, 0.0), 
                             Vector4::new(1.0, 1.0, 1.0, 1.0));
+}
+
+fn draw_letter(gd: &GameData, p: Point2<i32>, letter: char) {
+    let c = letter.to_ascii_uppercase();
+    let index = c as i32 - 'A' as i32;
+    let new_p = Point2::new(p.x + 78 - (index * 6) as i32, p.y);
+    let letter_w = 1.0 / 26.0;
+
+    draw_texture_rect_extra(gd, &gd.font, new_p,
+                            gd.tick as f32, 
+                            Vector2::new(letter_w * index as f32 + letter_w, 1.0),
+                            Vector2::new(1.0 - letter_w * index as f32, 1.0),
+                            Vector2::new(0.0, 0.0), 
+                            Vector4::new(1.0, 1.0, 1.0, 1.0));
+}
+
+fn draw_string(gd: &GameData, p: Point2<i32>, s: String) {
+    let mut y = p.y;
+    for l in s.lines() {
+        let len = l.len();
+        for (i, c) in l.chars().enumerate() {
+            draw_letter(gd, Point2::new(p.x + 6 * i as i32 
+                                        - 3 * len as i32, y), c);
+        }
+        y += 10;
+    }
 }
 
 fn draw_texture_rect_centered(gd: &GameData, tex: &Texture, p: Point2<i32>) {
@@ -270,7 +343,7 @@ fn draw_water(gd: &GameData) {
     gd.water.set_uniform_vec2("offset", &zero());
     gd.water.set_uniform_float("tick", gd.tick as f32);
     gd.water.set_uniform_vec2("trim", &Vector2::new(1.0, 1.0));
-    gd.water.set_uniform_vec2("bounce", &Vector2::new(8.0 / WIDTH as f32, 0.0));
+    gd.water.set_uniform_vec2("bounce", &Vector2::new(10.0 / WIDTH as f32, 0.0));
     unsafe { gl::Viewport(0, 0, WIDTH as GLint, HEIGHT as GLint) };
     gd.water.draw(&gd.quad);
 }
@@ -317,28 +390,66 @@ fn draw_age(gd: &GameData) {
     draw_digit(&gd, Point2::new(190, 16), gd.age % 10);
 }
 
+fn draw_modal(gd: &GameData, m: Modal) {
+    draw_texture_rect_extra(gd, &gd.modal_box,
+                            Point2::new(WIDTH as i32 / 2, HEIGHT as i32 / 2),
+                            gd.tick as f32,
+                            Vector2::new(1.0, 1.0),
+                            Vector2::new(1.0, 1.0), // rtrim
+                            Vector2::new(1.0, 0.0),
+                            Vector4::new(1.0, 1.0, 1.0, 1.0));
+    match m.kind {
+        ModalKind::HelloWorld => {
+            draw_string(gd, Point2::new(WIDTH as i32 / 2, HEIGHT as i32 / 2),
+            "HELLO\nWorld".to_string());
+        }
+        _ => {
+        }
+    }
+}
+
+fn draw_cities(gd: &GameData) {
+    for city in CITIES.iter() {
+        let p = Point2::new(city.position[0], city.position[1]);
+        if city.home {
+            let offset_y = (gd.tick * 4.0).sin().abs() * 3.0;
+            draw_texture_rect_extra(gd, &gd.home_marker,
+                                    Point2::new(p.x, p.y + offset_y as i32),
+                                    gd.tick as f32,
+                                    Vector2::new(1.0, 1.0), // trim
+                                    Vector2::new(1.0, 1.0), // rtrim
+                                    Vector2::new(0.0, 0.0), // wiggle
+                                    Vector4::new(1.0, 0.9, 0.9, 1.0));
+        } else {
+            draw_texture_rect_screenspace(gd, &gd.city_marker, p);
+        }
+    }
+}
+
 fn draw(ctx: &mut Context) {
     let gd = unsafe { GAME_DATA.as_mut().unwrap() };
 
     ctx.window().clear();
     draw_water(gd);
     draw_map(gd);
-    draw_bar(gd, Point2::new((WIDTH - 50) as i32, (HEIGHT - 20) as i32), 
-             &gd.belonging_label, 1.0);
+    draw_bar(gd, Point2::new((WIDTH - 50) as i32, (HEIGHT - 20) as i32),
+             &gd.relaxation_label, gd.stats.relaxation);
     draw_bar(gd, Point2::new((WIDTH - 50) as i32, (HEIGHT - 40) as i32), 
-             &gd.purpose_label, (gd.tick.sin() / 2.0 + 0.5) as f32);
-    draw_bar(gd, Point2::new((WIDTH - 50) as i32, (HEIGHT - 60) as i32),
-             &gd.pride_label, 1.0);
-    draw_bar(gd, Point2::new((WIDTH - 50) as i32, (HEIGHT - 80) as i32),
-             &gd.relaxation_label, 1.0);
+             &gd.belonging_label, gd.stats.belonging);
+    if gd.age > 4 {
+        draw_bar(gd, Point2::new((WIDTH - 50) as i32, (HEIGHT - 60) as i32),
+                 &gd.pride_label, gd.stats.pride);
+    }
+    if gd.age > 13 {
+        draw_bar(gd, Point2::new((WIDTH - 50) as i32, (HEIGHT - 80) as i32), 
+                 &gd.purpose_label, gd.stats.purpose);
+    }
     draw_focus_box(&gd);
     draw_age(&gd);
 
+    draw_cities(&gd);
 
-    for city in CITIES.iter() {
-        let p = Point2::new(city.position[0], city.position[1]);
-        draw_texture_rect_screenspace(gd, &gd.city_marker, p);
-    }
+    //draw_modal(gd, Modal::new(ModalKind::HelloWorld));
 
     draw_texture_rect_screenspace(gd, &gd.cursor, gd.cursor_position / SCALING as i32);
 
@@ -356,6 +467,7 @@ fn draw(ctx: &mut Context) {
 
 fn update(dt: f64) {
     let mut gd = unsafe { GAME_DATA.as_mut().unwrap() };
+    let dweek = (dt / TICKS_PER_WEEK) as f32;
 
     // arrow
     { 
@@ -370,9 +482,131 @@ fn update(dt: f64) {
         gd.arrow_position.y = gd.arrow_position.y + delta * dt as f32 * 8.0;
     }
 
-    // age
-    {
-        gd.age = (gd.tick / (TICKS_PER_WEEK * 50.0)) as u32;
+    if let Some(m) = &gd.current_modal {
+        if let Some(d) = m.descision {
+            match m.kind {
+                _ => {
+                }
+            }
+        }
+    } else { // no modal
+        // age
+        {
+            gd.age = (gd.tick / (TICKS_PER_WEEK * 50.0)) as u32;
+        }
+
+        // stats
+        {
+            match gd.age {
+                0...2 => {
+                    gd.stats.relaxation -= 0.005 * dweek;
+                    gd.stats.belonging -= 0.005 * dweek;
+                    match gd.current_focus {
+                        Focus::Play => {
+                            gd.stats.relaxation += 0.015 * dweek;
+                        }
+                        Focus::Socialize | _ => {
+                            gd.stats.belonging += 0.015 * dweek;
+                        }
+                    }
+                }
+                3...5 => {
+                    gd.stats.relaxation -= 0.005 * dweek;
+                    gd.stats.belonging -= 0.005 * dweek;
+                    gd.stats.pride -= 0.005 * dweek;
+                    if gd.stats.belonging > 0.99 {
+                        gd.stats.pride += 0.006 * dweek;
+                    }
+                    match gd.current_focus {
+                        Focus::Play => {
+                            gd.stats.relaxation += 0.015 * dweek;
+                            gd.stats.play_exp += 0.005 * dweek;
+                        }
+                        Focus::Socialize => {
+                            gd.stats.belonging += 0.015 * dweek;
+                            gd.stats.social_exp += 0.005 * dweek;
+                        }
+                        Focus::Research | _ => {
+                            gd.stats.research_exp += 0.005 * dweek;
+                        }
+                    }
+                }
+                6...12 => {
+                    gd.stats.relaxation -= 0.005 * dweek;
+                    gd.stats.belonging -= 0.005 * dweek;
+                    gd.stats.pride -= 0.005 * dweek;
+                    gd.stats.purpose -= 0.005 * dweek;
+                    match gd.current_focus {
+                        Focus::Play => {
+                            gd.stats.relaxation += 0.015 * dweek;
+                            gd.stats.pride += gd.stats.play_exp * dweek / 100.0;
+                            gd.stats.play_exp += 0.005 * dweek;
+                        }
+                        Focus::Socialize | _ => {
+                            gd.stats.belonging += 0.015 * dweek;
+                            gd.stats.pride += 0.005 * dweek;
+                            gd.stats.social_exp += 0.005 * dweek;
+                        }
+                        Focus::Research | _ => {
+                            gd.stats.research_exp += 0.005 * dweek;
+                        }
+                    }
+                }
+                13...20 => {
+                    gd.stats.relaxation -= 0.005 * dweek;
+                    gd.stats.belonging -= 0.005 * dweek;
+                    gd.stats.pride -= 0.005 * dweek;
+                    gd.stats.purpose -= 0.005 * dweek;
+                    match gd.current_focus {
+                        Focus::Play => {
+                            gd.stats.relaxation += 0.010 * dweek;
+                            gd.stats.play_exp += 0.001 * dweek;
+                        }
+                        Focus::Socialize => {
+                            gd.stats.belonging += 0.010 * dweek;
+                            gd.stats.social_exp += 0.001 * dweek;
+                        }
+                        Focus::Research => {
+                            gd.stats.belonging += 0.001 * dweek;
+                            gd.stats.pride += 0.001 * dweek;
+                            gd.stats.research_exp += 0.001 * dweek;
+                        }
+                        Focus::Create | _ => {
+                            gd.stats.pride += 0.005 * dweek;
+                            gd.stats.create_exp += 0.001 * dweek;
+                        }
+                    }
+                }
+                _ => {
+                    gd.stats.relaxation -= 0.005 * dweek;
+                    gd.stats.belonging -= 0.005 * dweek;
+                    match gd.current_focus {
+                        Focus::Play => {
+                            gd.stats.relaxation += 0.015 * dweek;
+                            gd.stats.play_exp += 0.005 * dweek;
+                        }
+                        Focus::Socialize | _ => {
+                            gd.stats.belonging += 0.015 * dweek;
+                            gd.stats.social_exp += 0.005 * dweek;
+                        }
+                        Focus::Research => {
+                            gd.stats.research_exp += 0.002 * dweek;
+                        }
+                        Focus::Create => {
+                            gd.stats.pride += gd.stats.create_exp / 100.0 * dweek;
+                            gd.stats.create_exp += 0.001 * dweek;
+                        }
+                        Focus::Work => {
+                        }
+                    }
+                }
+            }
+        }
+
+        gd.stats.belonging = nalgebra::clamp(gd.stats.belonging , 0.0, 1.1);
+        gd.stats.purpose = nalgebra::clamp(gd.stats.purpose, 0.0, 1.1);
+        gd.stats.pride = nalgebra::clamp(gd.stats.pride, 0.0, 1.1);
+        gd.stats.relaxation = nalgebra::clamp(gd.stats.relaxation, 0.0, 1.1);
     }
 }
 
@@ -462,6 +696,10 @@ fn main() -> Result<(), String> {
                 &mut image::load(
                     &mut Cursor::new(include_bytes!("../assets/city_marker.png").as_ref()),
                     image::ImageFormat::PNG).unwrap()),
+            home_marker: Texture::new_rgba_from_image(
+                &mut image::load(
+                    &mut Cursor::new(include_bytes!("../assets/home_marker.png").as_ref()),
+                    image::ImageFormat::PNG).unwrap()),
             bar: Texture::new_rgba_from_image(
                 &mut image::load(
                     &mut Cursor::new(include_bytes!("../assets/bar.png").as_ref()),
@@ -498,6 +736,10 @@ fn main() -> Result<(), String> {
                 &mut image::load(
                     &mut Cursor::new(include_bytes!("../assets/numbers.png").as_ref()),
                     image::ImageFormat::PNG).unwrap()),
+            font: Texture::new_rgba_from_image(
+                &mut image::load(
+                    &mut Cursor::new(include_bytes!("../assets/font.png").as_ref()),
+                    image::ImageFormat::PNG).unwrap()),
             age_label: Texture::new_rgba_from_image(
                 &mut image::load(
                     &mut Cursor::new(include_bytes!("../assets/age_label.png").as_ref()),
@@ -506,15 +748,22 @@ fn main() -> Result<(), String> {
                 &mut image::load(
                     &mut Cursor::new(include_bytes!("../assets/arrow.png").as_ref()),
                     image::ImageFormat::PNG).unwrap()),
+            modal_box: Texture::new_rgba_from_image(
+                &mut image::load(
+                    &mut Cursor::new(include_bytes!("../assets/modal.png").as_ref()),
+                    image::ImageFormat::PNG).unwrap()),
             fb: fb,
             color_tex: color_tex,
             light_tex: light_tex,
             tick: 0.0,
 
-            age: 1,
+            age: 0,
+            stats: Stats::new(),
             current_focus: Focus::Play,
             current_city: 0,
             arrow_position: Vector2::new(262.0, 17.0),
+            paused: false,
+            current_modal: None,
         })
     };
 
