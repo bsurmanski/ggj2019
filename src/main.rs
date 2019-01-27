@@ -43,7 +43,9 @@ pub enum ModalKind {
     Tantrum,
     Move,
     Married,
+    Divorce,
     Kids,
+    Die,
 }
 
 pub fn maybe_start_modal(gd: &mut GameData, new_modal: Modal) -> bool {
@@ -234,7 +236,8 @@ pub struct GameData {
     current_focus: Focus,
     current_city: usize,
     married: bool,
-    kids: i32,
+    kids: u32,
+    moves: u32,
     arrow_position: Vector2<f32>,
     plane_position: Vector2<f32>,
     current_modal: Option<Modal>,
@@ -694,12 +697,73 @@ fn execute_modal(gd: &mut GameData) {
     match modal.kind {
         ModalKind::Move => {
             let current_home = home_city();
+            let not_moving = str_eq(choice, "no") || str_eq(choice, current_home.name);
             gd.plane_position = Vector2::new(current_home.position[0] as f32,
                                              current_home.position[1] as f32);
-            if !str_eq(choice, "no") {
+            if !not_moving {
                 set_home_city(choice);
+                gd.moves += 1;
+
+                match gd.moves {
+                    1 => {
+                        gd.stats.relaxation -= 0.05; 
+                        gd.stats.purpose += 0.1;
+                        gd.stats.belonging += 0.1;
+                        gd.stats.pride += 0.25;
+                    }
+                    2 => {
+                        gd.stats.pride += 0.05;
+                    }
+                    3 => {
+                        gd.stats.relaxation -= 0.05; 
+                        gd.stats.purpose -= 0.1;
+                    }
+                    _ => {
+                        gd.stats.belonging -= 0.1;
+                        gd.stats.purpose -= 0.1;
+                    }
+                }
             } 
+
             gd.game_state = GameState::Fly;
+        }
+        ModalKind::Married => {
+            if str_eq(choice, "yes") {
+                gd.stats.purpose += 0.2;
+                gd.stats.belonging += 0.1;
+                gd.stats.relaxation -= 0.1;
+                gd.married = true;
+            }
+            gd.game_state = GameState::Game;
+        }
+        ModalKind::Kids => {
+            if str_eq(choice, "yes") {
+                gd.stats.pride += 0.3;
+                gd.stats.purpose += 0.1;
+                gd.stats.relaxation -= 0.1;
+            }
+            gd.game_state = GameState::Game;
+        }
+        ModalKind::Divorce => {
+            if str_eq(choice, "mend") {
+                gd.stats.pride += 0.3;
+                gd.stats.purpose += 0.1;
+                gd.stats.belonging += 0.1;
+                gd.stats.relaxation -= 0.2;
+            }
+
+            if str_eq(choice, "divorce") {
+                gd.stats.pride -= 0.1;
+                gd.stats.purpose -= 0.1;
+                gd.stats.relaxation += 0.1;
+            }
+
+            if str_eq(choice, "suffer") {
+                gd.stats.pride -= 0.1;
+                gd.stats.purpose += 0.3;
+                gd.stats.relaxation -= 0.1;
+            }
+            gd.game_state = GameState::Game;
         }
         ModalKind::Tantrum => {
             if str_eq(choice, "yes") {
@@ -709,6 +773,7 @@ fn execute_modal(gd: &mut GameData) {
                 gd.stats.relaxation -= 0.1;
                 gd.stats.social_exp += 0.1;
             }
+            gd.game_state = GameState::Game;
         }
         _ => {
             gd.game_state = GameState::Game;
@@ -779,7 +844,7 @@ fn update(dt: f64) {
             if gd.age == 30 {
                 let home = home_city();
                 maybe_start_modal(
-                    gd, Modal::new(ModalKind::Move,
+                    gd, Modal::new(ModalKind::Married,
                                    "get married?",
                                    vec!["yes", "no"]));
             }
@@ -787,8 +852,8 @@ fn update(dt: f64) {
             if gd.age == 32 && gd.married {
                 let home = home_city();
                 maybe_start_modal(
-                    gd, Modal::new(ModalKind::Move,
-                                   "spouce wants kids",
+                    gd, Modal::new(ModalKind::Kids,
+                                   "spouse wants kids",
                                    vec!["yes", "no"]));
             }
 
@@ -796,11 +861,39 @@ fn update(dt: f64) {
                 let home = home_city();
                 maybe_start_modal(
                     gd, Modal::new(ModalKind::Move,
-                                   "move somewhere exciting?",
+                                   "move somewhere\nexciting?",
                                    vec!["seattle", "calgary", "boulder", "la"]));
             }
 
-            if gd.age == 40 {
+            if gd.age == 40 && gd.married {
+                maybe_start_modal(
+                    gd, Modal::new(ModalKind::Divorce,
+                                   "failing marriage",
+                                   vec!["divorce", "mend", "suffer"]));
+            }
+
+            if gd.age == 60 {
+                let home = home_city();
+                maybe_start_modal(
+                    gd, Modal::new(ModalKind::Move,
+                                   "time to retire?",
+                                   vec![home.name, "miami", "la"]));
+            }
+
+            if gd.age == 70 && !gd.married {
+                let home = home_city();
+                maybe_start_modal(
+                    gd, Modal::new(ModalKind::Die,
+                                   "die?",
+                                   vec!["if i must"]));
+            }
+
+            if gd.age == 75 {
+                let home = home_city();
+                maybe_start_modal(
+                    gd, Modal::new(ModalKind::Die,
+                                   "die?",
+                                   vec!["if i must"]));
             }
 
             // stats
@@ -821,7 +914,7 @@ fn update(dt: f64) {
                     3...5 => {
                         gd.stats.relaxation -= 0.005 * dweek;
                         gd.stats.belonging -= 0.005 * dweek;
-                        gd.stats.pride -= 0.005 * dweek;
+                        gd.stats.pride -= 0.002 * dweek;
                         if gd.stats.belonging > 0.99 {
                             gd.stats.pride += 0.006 * dweek;
                         }
@@ -846,12 +939,12 @@ fn update(dt: f64) {
                         gd.stats.purpose -= 0.005 * dweek;
                         match gd.current_focus {
                             Focus::Play => {
-                                gd.stats.relaxation += 0.015 * dweek;
+                                gd.stats.relaxation += 0.020 * dweek;
                                 gd.stats.pride += gd.stats.play_exp * dweek / 100.0;
                                 gd.stats.play_exp += 0.005 * dweek;
                             }
                             Focus::Socialize | _ => {
-                                gd.stats.belonging += 0.015 * dweek;
+                                gd.stats.belonging += 0.020 * dweek;
                                 gd.stats.pride += 0.005 * dweek;
                                 gd.stats.social_exp += 0.005 * dweek;
                             }
@@ -867,11 +960,11 @@ fn update(dt: f64) {
                         gd.stats.purpose -= 0.005 * dweek;
                         match gd.current_focus {
                             Focus::Play => {
-                                gd.stats.relaxation += 0.010 * dweek;
+                                gd.stats.relaxation += 0.016 * dweek;
                                 gd.stats.play_exp += 0.001 * dweek;
                             }
                             Focus::Socialize => {
-                                gd.stats.belonging += 0.010 * dweek;
+                                gd.stats.belonging += 0.016 * dweek;
                                 gd.stats.social_exp += 0.001 * dweek;
                             }
                             Focus::Research => {
@@ -880,14 +973,17 @@ fn update(dt: f64) {
                                 gd.stats.research_exp += 0.001 * dweek;
                             }
                             Focus::Create | _ => {
-                                gd.stats.pride += 0.005 * dweek;
+                                gd.stats.purpose += 0.0010 * dweek;
+                                gd.stats.pride += 0.0008 * dweek;
                                 gd.stats.create_exp += 0.001 * dweek;
                             }
                         }
                     }
-                    _ => {
+                    21...40 => {
                         gd.stats.relaxation -= 0.005 * dweek;
                         gd.stats.belonging -= 0.005 * dweek;
+                        gd.stats.pride -= 0.005 * dweek;
+                        gd.stats.purpose -= 0.005 * dweek;
                         match gd.current_focus {
                             Focus::Play => {
                                 gd.stats.relaxation += 0.015 * dweek;
@@ -905,6 +1001,35 @@ fn update(dt: f64) {
                                 gd.stats.create_exp += 0.001 * dweek;
                             }
                             Focus::Work => {
+                                gd.stats.pride += 0.02 * dweek;
+                                gd.stats.purpose += 0.01 * dweek;
+                            }
+                        }
+                    }
+                    _ => {
+                        gd.stats.relaxation -= 0.003 * dweek;
+                        gd.stats.belonging -= 0.003 * dweek;
+                        gd.stats.pride -= 0.003 * dweek;
+                        gd.stats.purpose -= 0.003 * dweek;
+                        match gd.current_focus {
+                            Focus::Play => {
+                                gd.stats.relaxation += 0.015 * dweek;
+                                gd.stats.play_exp += 0.005 * dweek;
+                            }
+                            Focus::Socialize | _ => {
+                                gd.stats.belonging += 0.015 * dweek;
+                                gd.stats.social_exp += 0.005 * dweek;
+                            }
+                            Focus::Research => {
+                                gd.stats.research_exp += 0.002 * dweek;
+                            }
+                            Focus::Create => {
+                                gd.stats.pride += gd.stats.create_exp / 100.0 * dweek;
+                                gd.stats.create_exp += 0.001 * dweek;
+                            }
+                            Focus::Work => {
+                                gd.stats.pride += 0.02 * dweek;
+                                gd.stats.purpose += 0.01 * dweek;
                             }
                         }
                     }
@@ -931,7 +1056,7 @@ fn tick(ctx: &mut Context, dt: Duration) {
 
 fn main() -> Result<(), String> {
     let mut ctx: Context = Context::new();
-    ctx.open_window("Draw".to_string(), WIDTH * SCALING, HEIGHT * SCALING);
+    ctx.open_window("Belonging".to_string(), WIDTH * SCALING, HEIGHT * SCALING);
 
     // Simple shader
     let mut prog = Program::new("Simple".to_string());
@@ -1081,6 +1206,7 @@ fn main() -> Result<(), String> {
             current_city: 0,
             married: false,
             kids: 0,
+            moves: 0,
             arrow_position: Vector2::new(262.0, 17.0),
             plane_position: Vector2::new(0.0, 0.0),
             modals_done: vec![],
