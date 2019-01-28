@@ -1,4 +1,6 @@
 default-target = "wasm32-unknown-emscripten"
 
 [target.emscripten]
-link-args = ["-s", "USE_SDL=2", "-s", "USE_SDL_MIXER=2", "-s", "USE_WEBGL2=1"]
+link-args = ["-s", "USE_SDL=2", 
+             #"-s", "USE_SDL_MIXER=2",
+             "-s", "USE_WEBGL2=1"]

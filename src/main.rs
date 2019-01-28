@@ -250,7 +250,8 @@ static mut GAME_DATA: Option<GameData> = None;
 static WIDTH: usize = 320;
 static HEIGHT: usize = 240;
 static SCALING: usize = 3;
-static TICKS_PER_WEEK: f64 = 0.1;
+//static TICKS_PER_WEEK: f64 = 0.1;
+static TICKS_PER_WEEK: f64 = 0.06;
 
 fn handle_input(ctx: &mut Context) {
     let gd = unsafe { GAME_DATA.as_mut().unwrap() };
@@ -373,9 +374,10 @@ fn handle_input(ctx: &mut Context) {
                                                            "SF", "Montreal", "No"]));
                         gd.game_state = GameState::Modal;
                     }
+                    /*
                     Event::MouseMotion { x, y, .. } => {
-                        gd.cursor_position = Point2::new(x, y);
-                    }
+                        //gd.cursor_position = Point2::new(x, y);
+                    } */
                     _ => {}
                 }
             }
@@ -659,6 +661,13 @@ fn draw(ctx: &mut Context) {
                                     Vector4::new(1.0, 1.0, 1.0, 1.0),
                                     rot_matrix);
         }
+        GameState::GameOver => {
+            gd.fb.bind();
+            unsafe { 
+                gl::ClearColor(0.1, 0.0, 0.1, 1.0);
+                gl::Clear(gl::COLOR_BUFFER_BIT); 
+            }
+        }
         GameState::Game | _ => {
             draw_standard(gd);
 
@@ -774,6 +783,9 @@ fn execute_modal(gd: &mut GameData) {
                 gd.stats.social_exp += 0.1;
             }
             gd.game_state = GameState::Game;
+        }
+        ModalKind::Die => {
+            gd.game_state = GameState::GameOver;
         }
         _ => {
             gd.game_state = GameState::Game;
@@ -986,12 +998,12 @@ fn update(dt: f64) {
                         gd.stats.purpose -= 0.005 * dweek;
                         match gd.current_focus {
                             Focus::Play => {
-                                gd.stats.relaxation += 0.015 * dweek;
-                                gd.stats.play_exp += 0.005 * dweek;
+                                gd.stats.relaxation += 0.017 * dweek;
+                                gd.stats.play_exp += 0.007 * dweek;
                             }
-                            Focus::Socialize | _ => {
-                                gd.stats.belonging += 0.015 * dweek;
-                                gd.stats.social_exp += 0.005 * dweek;
+                            Focus::Socialize => {
+                                gd.stats.belonging += 0.017 * dweek;
+                                gd.stats.social_exp += 0.007 * dweek;
                             }
                             Focus::Research => {
                                 gd.stats.research_exp += 0.002 * dweek;
@@ -1013,12 +1025,12 @@ fn update(dt: f64) {
                         gd.stats.purpose -= 0.003 * dweek;
                         match gd.current_focus {
                             Focus::Play => {
-                                gd.stats.relaxation += 0.015 * dweek;
-                                gd.stats.play_exp += 0.005 * dweek;
+                                gd.stats.relaxation += 0.017 * dweek;
+                                gd.stats.play_exp += 0.007 * dweek;
                             }
-                            Focus::Socialize | _ => {
-                                gd.stats.belonging += 0.015 * dweek;
-                                gd.stats.social_exp += 0.005 * dweek;
+                            Focus::Socialize => {
+                                gd.stats.belonging += 0.017 * dweek;
+                                gd.stats.social_exp += 0.007 * dweek;
                             }
                             Focus::Research => {
                                 gd.stats.research_exp += 0.002 * dweek;
@@ -1092,14 +1104,10 @@ fn main() -> Result<(), String> {
         image::ImageFormat::PNG,
     )
     .unwrap();
-    dbg!(unsafe { gl::GetError() });
     let tex = Texture::new_rgba_from_image(&mut img);
-    dbg!(unsafe { gl::GetError() });
 
     let mut fb = Framebuffer::new();
-    dbg!(unsafe { gl::GetError() });
     let color_tex = Texture::new_rgba(WIDTH, HEIGHT);
-    dbg!(unsafe { gl::GetError() });
     let light_tex = Texture::new_rgba(WIDTH, HEIGHT);
     fb.add_target(&color_tex);
     fb.add_target(&light_tex);
@@ -1107,7 +1115,6 @@ fn main() -> Result<(), String> {
     unsafe { gl::Viewport(0, 0, 
                           WIDTH as GLint,
                           HEIGHT as GLint) };
-    dbg!(unsafe { gl::GetError() });
 
     unsafe {
         GAME_DATA = Some(GameData {
@@ -1216,6 +1223,7 @@ fn main() -> Result<(), String> {
         })
     };
 
+    dbg!(unsafe { gl::GetError() });
     ctx.run(&mut tick);
     Ok(())
 }

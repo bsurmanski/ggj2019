@@ -5,12 +5,16 @@ authors = ["Brandon Surmanski <b.surmanski@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-rockwork = { path = "../rockwork" }
+# rockwork = { path = "../rockwork" }
+rockwork = { git = "https://github.com/bsurmanski/rockwork", tag = "ggj19" }
 sdl2 = "0.32.1"
 gl = "0.11.0"
 image = {version = "0.21.0", default_features = false, features = ["png_codec"]}
 nalgebra = "0.16"
 lazy_static = "1.2.0"
+
+[profile.release]
+opt-level = 1
 
 [target.'cfg(target_os = "emscripten")'.dependencies]
 emscripten = { git = "https://github.com/bsurmanski/emscripten-rs" }

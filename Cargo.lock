@@ -95,7 +95,7 @@ dependencies = [
  "image 0.21.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "nalgebra 0.16.13 (registry+https://github.com/rust-lang/crates.io-index)",
- "rockwork 0.1.2",
+ "rockwork 0.1.2 (git+https://github.com/bsurmanski/rockwork?tag=ggj19)",
  "sdl2 0.32.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -376,6 +376,7 @@ dependencies = [
 [[package]]
 name = "rockwork"
 version = "0.1.2"
+source = "git+https://github.com/bsurmanski/rockwork?tag=ggj19#749ff814a1b846cc83c66e9f2988ba334e05ebf2"
 dependencies = [
  "emscripten 0.1.0 (git+https://github.com/bsurmanski/emscripten-rs)",
  "gl 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -506,6 +507,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "checksum rand_xorshift 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)" = "cbf7e9e623549b0e21f6e97cf8ecf247c1a8fd2e8a992ae265314300b2455d5c"
 "checksum rawpointer 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "ebac11a9d2e11f2af219b8b8d833b76b1ea0e054aa0e8d8e9e4cbde353bdf019"
 "checksum rdrand 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "678054eb77286b51581ba43620cc911abf02758c91f93f479767aed0f90458b2"
+"checksum rockwork 0.1.2 (git+https://github.com/bsurmanski/rockwork?tag=ggj19)" = "<none>"
 "checksum rustc_version 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)" = "138e3e0acb6c9fb258b19b67cb8abd63c00679d2851805ea151465464fe9030a"
 "checksum safe-transmute 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)" = "9604873ffe1980bc1f179103704a65c8aca141c248d9e52b7af95ff10578166e"
 "checksum sdl2 0.32.1 (registry+https://github.com/rust-lang/crates.io-index)" = "0ebf85f207d42e4da59fa31fff977be5ff0b224873506c4bd70cc1c94b331593"
